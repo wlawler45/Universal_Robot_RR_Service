@@ -1,0 +1,52 @@
+service robot.universalrobotics
+
+option version 0.9
+
+namedarray point3f
+        field single x
+	field single y
+	field single z
+end
+
+struct Analog
+
+	field uint8 Pin
+	field double state
+end
+
+struct Digital
+
+	field uint8 Pin
+	field bool state
+end
+
+struct IOStates
+	field Digital[] digital_in_states
+	field Digital[] digital_out_states
+	field Analog[] analog_in_states
+	field Analog[] analog_out_states
+	field Digital[] flag_states
+end
+
+struct JointData
+	field uint64 ID
+	field double[] joint_values
+end
+
+struct JointCommand
+	field uint64 seqno
+    	field uint64 status_seqno
+    	field double[] command
+end
+
+object Universal_Robot
+    	function void StartRobot()
+	function void StopRobot()
+	function void Command_Joints(double[] command)
+    	wire JointData current_joints [readonly]
+	
+#	wire JointCommand command_joints [writeonly]
+    	
+	
+	
+end object
