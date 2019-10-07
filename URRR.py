@@ -556,13 +556,15 @@ def getConnectedRobot(wait=False, timeout=-1):
         
         
 class UR_Joint_Listener(object):
-    RATE = 0.02
+    #RATE = 0.02
     def __init__(self, robot, goal_time_tolerance=None):
         self.goal_time_tolerance = goal_time_tolerance or 0.0
         self.joint_goal_tolerances = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
         self.following_lock = threading.Lock()
         self.T0 = time.time()
         self.robot = robot
+        self.trajectory_running=False
+        self._current_trajectory=None
         #self.server = actionlib.ActionServer("follow_joint_trajectory",
         #                                    FollowJointTrajectoryAction,
         #                                   self.on_goal, self.on_cancel, auto_start=False)
@@ -652,16 +654,22 @@ class UR_Joint_Listener(object):
         #    accelerations = [0] * 6,
         #   time_from_start = rospy.Duration(0.0))]
     @property
-    def easy_mode(self):
+    def command_mode(self):
         
         return self._mode
 
-    @easy_mode.setter
-    def easy_mode(self,value):
+    @command_mode.setter
+    def command_mode(self,value):
         print("Changing mode to: "+str(value))
         self._mode=value
         
-    def easy_jog(self,joint_positions):
+    def execute_trajectory(self,trajectory):
+        self.trajectory_running=True
+        self._current_trajectory=trajectory
+        return trajectory_generator(self)
+
+        
+    def jog_joint(self,joint_positions,joint_velocity):
         
         # Checks that the robot is connected
         if not self.robot:
@@ -770,6 +778,90 @@ class UR_Joint_Listener(object):
                     #    self.goal_handle = None
                     
         """
+        
+class trajectory_generator(object):
+    def __init__(self,robot_object):
+        self._j=0
+        self._closed=False
+        self.robot_object=robot_object
+        self._aborted=False
+        self.duration_from_start=0
+        #self._goal = FollowJointTrajectoryGoal()
+        #joint_names=[]
+        #for i in self.robot_object._current_trajectory.joint_names:
+        #    joint_names.append(str(i))
+        #self._goal.trajectory.joint_names=joint_names
+        #self._goal_time_tolerance = rospy.Time(0.1)
+        #self._goal.goal_time_tolerance = self._goal_time_tolerance
+        
+
+    def Next(self): #add joints next
+        
+        trajectory_status=RRN.NewStructure("com.robotraconteur.robotics.trajectory.TrajectoryStatus")
+        if self._aborted:
+            self.robot_object.trajectory_running=False
+            self.robot_object._current_trajectory=None
+            trajectory_status.status= -1
+            raise OperationAbortedException()
+        #check if number of items = joint number and error
+        elif self._closed:
+            
+            self.robot_object.trajectory_running=False
+            self.robot_object._current_trajectory=None
+            trajectory_status.status=3
+            raise StopIterationException()
+        elif self._j>=(len(self.robot_object._current_trajectory.waypoints)):
+            trajectory_status.status=3
+            #self._goal.trajectory.header.stamp = rospy.Time.now()
+            #print(self._goal)
+            #result=self.robot_object.trajectory_client.send_goal(self._goal)
+            
+            #self.robot_object.trajectory_client.wait_for_result(rospy.Duration(30.0))
+            #print(self.robot_object.trajectory_client.get_result())
+            #TODO: use global variable update as seqno, but messy with threading
+            trajectory_status.seqno=self._j
+            trajectory_status.current_waypoint=self._j
+            self.duration_from_start=(self.robot_object.RATE)*self._j
+            trajectory_status.trajectory_time=self.duration_from_start
+            print("sending and finishing")
+            self._j=0
+            raise StopIterationException()
+        else:
+            trajectory_status.status=2
+            print("continuing")
+        waypoint=self.robot_object._current_trajectory.waypoints[self._j]
+        print(self._j)
+        print(waypoint.joint_position)
+
+        #print(len(self.robot_object._current_trajectory.waypoints)-1)
+        #point = JointTrajectoryPoint()
+        #point.positions = list(waypoint.joint_position)
+        #point.time_from_start = rospy.Duration(waypoint.time_from_start)
+        
+        #self._goal.trajectory.points.append(point)
+        self.robot_object.jog_joint(waypoint.joint_position,waypoint.joint_velocity)
+        time.sleep(1)
+        #if (self._j>=8):
+        #    raise StopIterationException()
+        
+        #a = copy.copy(v)
+        #for i in xrange(len(a)):
+        #    a[i]+=self._j
+        
+        trajectory_status.seqno=self._j
+        trajectory_status.current_waypoint=self._j
+        self.duration_from_start=(self.robot_object.RATE)*self._j
+        trajectory_status.trajectory_time=self.duration_from_start
+        
+        self._j+=1
+        
+        return trajectory_status
+        
+    def Abort(self):
+        self._aborted=True
+        
+    def Close(self):
+        self._closed=True
                     
 def joinAll(threads):
     while any(t.isAlive() for t in threads):
@@ -858,9 +950,19 @@ def main():
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.geometry")
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.uuid")
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.datetime")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.identifier")
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.sensordata")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.resource")
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.device")
-        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.easy")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.units")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.joints")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.trajectory")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.datatype")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.signal")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.param")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.tool")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.payload")
+        RRN.RegisterServiceTypeFromFile("com.robotraconteur.robotics.robot")
         connection = URConnection(robot_hostname, PORT, program)
         connection.connect()
         connection.send_reset_program()
@@ -907,7 +1009,7 @@ def main():
                 
                 
                 RRN.RegisterService("Universal_Robot",
-                                      "com.robotraconteur.robotics.easy.EasyRobot",
+                                      "com.robotraconteur.robotics.robot.Robot",
                                                   action_server)
     
                 #Register the service type and the service
