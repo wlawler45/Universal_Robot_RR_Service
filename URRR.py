@@ -7,8 +7,8 @@ import socket, select
 import struct
 import traceback, code
 import optparse
-import socketserver
-from pathlib import Path
+import SocketServer
+from pathlib2 import Path
 
 import numpy as np
 
@@ -121,7 +121,7 @@ def log(s):
 #end
 #'''
 Reset="def resetProg():"+"\n"+"sleep(0.0)"+"\n"+"end"+"\n"
-RESET_PROGRAM = b = bytes(Reset, 'utf-8')
+RESET_PROGRAM = b = bytearray(Reset, 'utf-8')
 
 #RESET_PROGRAM = ''
     
@@ -354,16 +354,19 @@ class URConnectionRT(object):
         #msg.effort = [0]*6
         #pub_joint_states.publish(msg)
         with last_joint_states_lock:
-            state=RRN.NewStructure("com.robotraconteur.robotics.easy.EasyRobotState")
+            state=RRN.NewStructure("com.robotraconteur.robotics.robot.RobotState")
             state.seqno=update
-            state.mode=1
+            state.controller_mode=1
+            state.operational_mode=1
+            state.controller_state=1
             state.joint_position=np.asarray(stateRT.q_actual)
             state.joint_velocity=np.asarray(stateRT.qd_actual)
             state.joint_effort=np.zeros(6)
             state.position_command=np.asarray(stateRT.q_target)
             state.velocity_command=np.asarray(stateRT.qd_target)
+            state.trajectory_running=False
             pub_state=state
-            last_joint_states = strt
+            last_joint_states = state
             
             #last_effort=stateRT.
             last_joint_state_time=time.time()
@@ -407,7 +410,7 @@ class URConnectionRT(object):
                 
                 
 
-class CommanderTCPHandler(socketserver.BaseRequestHandler):
+class CommanderTCPHandler(SocketServer.BaseRequestHandler):
 
     def recv_more(self):
         global last_joint_states, last_joint_states_lock,last_joint_state_time
@@ -491,7 +494,7 @@ class CommanderTCPHandler(socketserver.BaseRequestHandler):
         assert(len(q_actual) == 6)
         q_robot = [0.0] * 6
         for i, q in enumerate(q_actual):
-            q_robot[i] = q - joint_offsets.get(joint_names[i], 0.0)
+            q_robot[i] = q #- joint_offsets.get(joint_names[i], 0.0)
         params = [MSG_SERVOJ, waypoint_id] + \
                  [MULT_jointstate * qq for qq in q_robot] + \
                  [MULT_time * t]
@@ -531,7 +534,7 @@ class CommanderTCPHandler(socketserver.BaseRequestHandler):
         return last_joint_states
     
 
-class TCPServer(socketserver.TCPServer):
+class TCPServer(SocketServer.TCPServer):
     allow_reuse_address = True  # Allows the program to restart gracefully on crash
     timeout = 5
 
@@ -556,7 +559,7 @@ def getConnectedRobot(wait=False, timeout=-1):
         
         
 class UR_Joint_Listener(object):
-    #RATE = 0.02
+    RATE = 0.25
     def __init__(self, robot, goal_time_tolerance=None):
         self.goal_time_tolerance = goal_time_tolerance or 0.0
         self.joint_goal_tolerances = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
@@ -584,7 +587,7 @@ class UR_Joint_Listener(object):
 
         #self.update_timer = rospy.Timer(rospy.Duration(self.RATE), self._update)
         
-    def StartRobot(self):
+    def start(self):
         with self.following_lock:
             if (self._streaming):
                 raise Exception("Already streaming")
@@ -593,7 +596,7 @@ class UR_Joint_Listener(object):
             t=threading.Thread(target=self._send_thread)
             t.start()
             
-    def StopRobot(self):
+    def stop(self):
         if (not self._streaming):
             raise Exception("Not streaming")
         with self.following_lock:
@@ -601,12 +604,12 @@ class UR_Joint_Listener(object):
             self._streaming=False
             
     def _send_thread(self):
-        global state_pub
+        global pub_state
         try:
             while self._streaming:
                 if (not self._streaming): return
                 with self.following_lock:
-                    self.easy_robot_state.OutValue=state_pub
+                    self.robot_state.OutValue=pub_state
                 
         except:
             #Exception will be thrown when the port is closed
@@ -645,7 +648,7 @@ class UR_Joint_Listener(object):
             time.sleep(0.1)
             state = self.robot.get_joint_states()
         self.traj_t0 = time.time()
-        self.joint_command=state.joint_values
+        self.joint_command=state.joint_position
         #self.traj = JointTrajectory()
         #self.traj.joint_names = joint_names
         #self.traj.points = [JointTrajectoryPoint(
@@ -684,12 +687,12 @@ class UR_Joint_Listener(object):
             now = time.time()
             
             try:
-                self.robot.send_servoj(999, joint_positions, 4 * self.RATE)
+                self.robot.send_servoj(999, joint_positions, 8 * self.RATE)
             except socket.error:
                 pass
                 
-            position_in_tol = within_tolerance(state.position, last_point.positions, self.joint_goal_tolerances)
-        print("Finished command and got to position=%r" %(position_in_tol))
+            #position_in_tol = within_tolerance(state.position, last_point.positions, self.joint_goal_tolerances)
+        #print("Finished command and got to position=%r" %(position_in_tol))
             #point0 = sample_traj(self.traj, now - self.traj_t0)
             #point0.time_from_start = rospy.Duration(0.0)
             #goal_handle.get_goal().trajectory.points.insert(0, point0)
@@ -942,9 +945,9 @@ def main():
     path=pather.absolute()
     #robot_hostname="ur-2013216004"
     robot_hostname="128.113.224.7"
-    with open(str(path)+'/prog.txt') as fin:
+    with open(str(path)+'/prog') as fin:
         programstring = fin.read() % {"driver_hostname": get_my_ip(robot_hostname, PORT), "driver_reverseport": reverse_port}
-    program=bytes(programstring,'utf-8')
+    program=bytearray(programstring)#,'utf-8')
     nodename="URConnection"
     with RR.ServerNodeSetup(nodename,2355):
         RRN.RegisterServiceTypeFromFile("com.robotraconteur.geometry")
@@ -1006,12 +1009,13 @@ def main():
                    
                     
                 action_server = UR_Joint_Listener(r, 1.0)
-                
+                action_server.set_robot(r)
+                action_server.start()
                 
                 RRN.RegisterService("Universal_Robot",
                                       "com.robotraconteur.robotics.robot.Robot",
                                                   action_server)
-    
+                raw_input("press enter to quit...\r\n")
                 #Register the service type and the service
                 #RRN.RegisterServiceTypeFromFile("universal_robotics")
                 #RRN.RegisterService("Universal_Robot","robot.universalrobotics.Universal_Robot",action_server)

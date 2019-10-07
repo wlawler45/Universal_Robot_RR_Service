@@ -328,8 +328,8 @@ class RobotState(object):
         while offset < len(buf):
             length, ptype = struct.unpack_from("!IB", buf, offset)
             assert offset + length <= len(buf)
-            memview=memoryview(buf)
-            package_buf = memview[offset:]
+            #memview=memoryview(buf)
+            package_buf = buffer(buf,offset,length)
             offset += length
 
             if ptype == PackageType.ROBOT_MODE_DATA:
