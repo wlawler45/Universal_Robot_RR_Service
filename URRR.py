@@ -2,15 +2,17 @@
 
 import time, sys, threading, math
 import copy
-import datetime
+#import datetime
 import socket, select
 import struct
 import traceback, code
 import optparse
 import SocketServer
 from pathlib2 import Path
-
+import traceback, code
 import numpy as np
+from FK_UR5 import fwd_kin
+import re
 
 #from dynamic_reconfigure.server import Server
 #from ur_driver.cfg import URDriverConfig
@@ -101,6 +103,8 @@ pub_io_states = rospy.Publisher('io_states', IOStates, queue_size=1)
 
 class EOF(Exception): pass
 
+class TimeoutError(Exception): pass
+
 def dumpstacks():
     id2name = dict([(th.ident, th.name) for th in threading.enumerate()])
     code = []
@@ -113,8 +117,8 @@ def dumpstacks():
     #print "\n".join(code)
 
 def log(s):
-    print("[%s] %s" % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), s))
-
+    #print("[%s] %s" % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), s))
+    pass
 
 #RESET_PROGRAM = '''def resetProg():
 #  sleep(0.0)
@@ -365,8 +369,31 @@ class URConnectionRT(object):
             state.position_command=np.asarray(stateRT.q_target)
             state.velocity_command=np.asarray(stateRT.qd_target)
             state.trajectory_running=False
+            pose=RRN.GetNamedArrayDType("com.robotraconteur.geometry.Pose")
+            position=np.zeros((1,),dtype=pose)
+            #(orientation,positionsave)=fwd_kin(state.joint_position)
+            #print(orientation[0])
+            #print(position[0][0])
+            """
+            position[0]['orientation']['w']=orientation[0]
+            position[0]['orientation']['x']=orientation[1]
+            position[0]['orientation']['y']=orientation[2]
+            position[0]['orientation']['z']=orientation[3]
+            position[0]['position']['x']=positionsave[0]
+            position[0]['position']['y']=positionsave[1]
+            position[0]['position']['z']=positionsave[2]
+            """
+            position[0]['orientation']['w']=0
+            position[0]['orientation']['x']=0
+            position[0]['orientation']['y']=0
+            position[0]['orientation']['z']=0
+            position[0]['position']['x']=0
+            position[0]['position']['y']=0
+            position[0]['position']['z']=0
+            state.kin_chain_tcp=position
             pub_state=state
             last_joint_states = state
+            
             
             #last_effort=stateRT.
             last_joint_state_time=time.time()
@@ -424,11 +451,11 @@ class CommanderTCPHandler(SocketServer.BaseRequestHandler):
             else:
                 now = time.time()
                 if last_joint_states and \
-                        last_joint_state_time < now - 5:
+                        last_joint_state_time < now - 15:
                     print("Timeout Error")
                     #rospy.logerr("Stopped hearing from robot (last heard %.3f sec ago).  Disconnected" % \
                                     # (now - last_joint_states.header.stamp).to_sec())
-                    raise EOF()
+                    raise TimeoutError()
 
     def handle(self):
         self.__socket_lock = threading.Lock()
@@ -474,6 +501,8 @@ class CommanderTCPHandler(SocketServer.BaseRequestHandler):
         except EOF:
             print("Connection closed (command):")
             setConnectedRobot(None)
+        except TimeoutError:
+            print("Connection Timed out")
 
     def __send_message(self, data):
         """
@@ -609,8 +638,9 @@ class UR_Joint_Listener(object):
             while self._streaming:
                 if (not self._streaming): return
                 with self.following_lock:
+
                     self.robot_state.OutValue=pub_state
-                
+                #time.sleep(0.001)
         except:
             #Exception will be thrown when the port is closed
             #just ignore it
@@ -665,20 +695,30 @@ class UR_Joint_Listener(object):
     def command_mode(self,value):
         print("Changing mode to: "+str(value))
         self._mode=value
-        
-    def execute_trajectory(self,trajectory):
-        self.trajectory_running=True
-        self._current_trajectory=trajectory
-        return trajectory_generator(self)
+    
+    def setf_signal(self,signal,value):
+        if("DO" in signal):
+            print("changing digital output")
+            array = re.findall(r'[0-9]+', signal)
+            print(int(array[0]))
+            self.robot.set_digital_out(int(array[0]),value)
 
+    def execute_trajectory(self,trajectory):
+        try:
+            self.trajectory_running=True
+            self._current_trajectory=trajectory
+            print("im executing")
+            return trajectory_generator(self)
+        except:
+            traceback.print_exc()
         
-    def jog_joint(self,joint_positions,joint_velocity):
+    def jog_joint(self,joint_positions,max_velocity=[], relative=None, wait=None):
         
         # Checks that the robot is connected
         if not self.robot:
-            
+            print("No robot connected")
             return
-        
+        print("grabbing lock")
         # Orders the joints of the trajectory according to joint_names
         #reorder_traj_joints(goal_handle.get_goal().trajectory, joint_names)
                 
@@ -689,7 +729,7 @@ class UR_Joint_Listener(object):
             try:
                 self.robot.send_servoj(999, joint_positions, 8 * self.RATE)
             except socket.error:
-                pass
+                traceback.print_exc()
                 
             #position_in_tol = within_tolerance(state.position, last_point.positions, self.joint_goal_tolerances)
         #print("Finished command and got to position=%r" %(position_in_tol))
@@ -713,7 +753,7 @@ class UR_Joint_Listener(object):
                 point0 = sample_traj(self.traj, now - self.traj_t0)
                 point0.time_from_start = rospy.Duration(0.0)
                 point1 = sample_traj(self.traj, now - self.traj_t0 + STOP_DURATION)
-                point1.velocities = [0] * 6
+                point1.velocities = [0] * 6traceback.print_exc()
                 point1.accelerations = [0] * 6
                 point1.time_from_start = rospy.Duration(STOP_DURATION)
                 self.traj_t0 = now
@@ -789,6 +829,7 @@ class trajectory_generator(object):
         self.robot_object=robot_object
         self._aborted=False
         self.duration_from_start=0
+        print("hello")
         #self._goal = FollowJointTrajectoryGoal()
         #joint_names=[]
         #for i in self.robot_object._current_trajectory.joint_names:
@@ -799,66 +840,69 @@ class trajectory_generator(object):
         
 
     def Next(self): #add joints next
-        
-        trajectory_status=RRN.NewStructure("com.robotraconteur.robotics.trajectory.TrajectoryStatus")
-        if self._aborted:
-            self.robot_object.trajectory_running=False
-            self.robot_object._current_trajectory=None
-            trajectory_status.status= -1
-            raise OperationAbortedException()
-        #check if number of items = joint number and error
-        elif self._closed:
+        try:
+            print("Hello")
+            trajectory_status=RRN.NewStructure("com.robotraconteur.robotics.trajectory.TrajectoryStatus")
+            if self._aborted:
+                self.robot_object.trajectory_running=False
+                self.robot_object._current_trajectory=None
+                trajectory_status.status= -1
+                raise OperationAbortedException()
+            #check if number of items = joint number and error
+            elif self._closed:
+                
+                self.robot_object.trajectory_running=False
+                self.robot_object._current_trajectory=None
+                trajectory_status.status=3
+                raise StopIterationException()
+            elif self._j>=(len(self.robot_object._current_trajectory.waypoints)):
+                trajectory_status.status=3
+                #self._goal.trajectory.header.stamp = rospy.Time.now()
+                #print(self._goal)
+                #result=self.robot_object.trajectory_client.send_goal(self._goal)
+                
+                #self.robot_object.trajectory_client.wait_for_result(rospy.Duration(30.0))
+                #print(self.robot_object.trajectory_client.get_result())
+                #TODO: use global variable update as seqno, but messy with threading
+                trajectory_status.seqno=self._j
+                trajectory_status.current_waypoint=self._j
+                self.duration_from_start=(self.robot_object.RATE)*self._j
+                trajectory_status.trajectory_time=self.duration_from_start
+                print("sending and finishing")
+                self._j=0
+                raise StopIterationException()
+            else:
+                trajectory_status.status=2
+                print("continuing")
+            waypoint=self.robot_object._current_trajectory.waypoints[self._j]
+            print(self._j)
+            print(waypoint.joint_position)
+
+            #print(len(self.robot_object._current_trajectory.waypoints)-1)
+            #point = JointTrajectoryPoint()
+            #point.positions = list(waypoint.joint_position)
+            #point.time_from_start = rospy.Duration(waypoint.time_from_start)
             
-            self.robot_object.trajectory_running=False
-            self.robot_object._current_trajectory=None
-            trajectory_status.status=3
-            raise StopIterationException()
-        elif self._j>=(len(self.robot_object._current_trajectory.waypoints)):
-            trajectory_status.status=3
-            #self._goal.trajectory.header.stamp = rospy.Time.now()
-            #print(self._goal)
-            #result=self.robot_object.trajectory_client.send_goal(self._goal)
+            #self._goal.trajectory.points.append(point)
+            self.robot_object.jog_joint(waypoint.joint_position,waypoint.joint_velocity)
+            time.sleep(1)
+            #if (self._j>=8):
+            #    raise StopIterationException()
             
-            #self.robot_object.trajectory_client.wait_for_result(rospy.Duration(30.0))
-            #print(self.robot_object.trajectory_client.get_result())
-            #TODO: use global variable update as seqno, but messy with threading
+            #a = copy.copy(v)
+            #for i in xrange(len(a)):
+            #    a[i]+=self._j
+            
             trajectory_status.seqno=self._j
             trajectory_status.current_waypoint=self._j
             self.duration_from_start=(self.robot_object.RATE)*self._j
             trajectory_status.trajectory_time=self.duration_from_start
-            print("sending and finishing")
-            self._j=0
-            raise StopIterationException()
-        else:
-            trajectory_status.status=2
-            print("continuing")
-        waypoint=self.robot_object._current_trajectory.waypoints[self._j]
-        print(self._j)
-        print(waypoint.joint_position)
-
-        #print(len(self.robot_object._current_trajectory.waypoints)-1)
-        #point = JointTrajectoryPoint()
-        #point.positions = list(waypoint.joint_position)
-        #point.time_from_start = rospy.Duration(waypoint.time_from_start)
-        
-        #self._goal.trajectory.points.append(point)
-        self.robot_object.jog_joint(waypoint.joint_position,waypoint.joint_velocity)
-        time.sleep(1)
-        #if (self._j>=8):
-        #    raise StopIterationException()
-        
-        #a = copy.copy(v)
-        #for i in xrange(len(a)):
-        #    a[i]+=self._j
-        
-        trajectory_status.seqno=self._j
-        trajectory_status.current_waypoint=self._j
-        self.duration_from_start=(self.robot_object.RATE)*self._j
-        trajectory_status.trajectory_time=self.duration_from_start
-        
-        self._j+=1
-        
-        return trajectory_status
+            
+            self._j+=1
+            
+            return trajectory_status
+        except:
+            traceback.print_exc()
         
     def Abort(self):
         self._aborted=True
@@ -943,7 +987,7 @@ def main():
     #with open(roslib.packages.get_pkg_dir('ur_driver') + '/prog') as fin:
     pather=Path()
     path=pather.absolute()
-    #robot_hostname="ur-2013216004"
+    # robot_hostname="ur-2013216004"
     robot_hostname="128.113.224.7"
     with open(str(path)+'/prog') as fin:
         programstring = fin.read() % {"driver_hostname": get_my_ip(robot_hostname, PORT), "driver_reverseport": reverse_port}
