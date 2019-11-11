@@ -13,6 +13,7 @@ import traceback, code
 import numpy as np
 import re
 from general_robotics_toolbox import *
+from general_robotics_toolbox_invkin import *
 
 #from dynamic_reconfigure.server import Server
 #from ur_driver.cfg import URDriverConfig
@@ -401,14 +402,15 @@ class URConnectionRT(object):
 			position[0]['position']['y']=positionsave[1]
 			position[0]['position']['z']=positionsave[2]
 			"""
-			UR_pose=fwdkin(UR_def,state.joint_position)
+			UR_pose=fwdkin(UR_def,state.joint_position).p
+			# q=R2q(UR_pose.R)
 			position[0]['orientation']['w']=0
 			position[0]['orientation']['x']=0
 			position[0]['orientation']['y']=0
 			position[0]['orientation']['z']=0
-			position[0]['position']['x']=UR_pose.p[0]
-			position[0]['position']['y']=UR_pose.p[1]
-			position[0]['position']['z']=UR_pose.p[2]
+			position[0]['position']['x']=UR_pose[0]
+			position[0]['position']['y']=UR_pose[1]
+			position[0]['position']['z']=UR_pose[2]
 			state.kin_chain_tcp=position
 			pub_state=state
 			last_joint_states = state
@@ -470,7 +472,7 @@ class CommanderTCPHandler(SocketServer.BaseRequestHandler):
 			else:
 				now = time.time()
 				if last_joint_states and \
-						last_joint_state_time < now - 15:
+						last_joint_state_time < now - 20:
 					print("Timeout Error")
 					#rospy.logerr("Stopped hearing from robot (last heard %.3f sec ago).  Disconnected" % \
 									# (now - last_joint_states.header.stamp).to_sec())
@@ -730,8 +732,16 @@ class UR_Joint_Listener(object):
 			return trajectory_generator(self)
 		except:
 			traceback.print_exc()
-		
-	def jog_joint(self,joint_positions,max_velocity=[], relative=None, wait=None):
+	
+	def genf(self,angle):
+		joint_diff=0
+		joint_cur=self.robot.get_joint_states().joint_position
+		for i in range(len(joint_cur)):
+			joint_diff+=abs(angle[i] - joint_cur[i])
+		return joint_diff
+
+	
+	def jog_joint(self,joint_positions,max_velocity, relative, wait):
 		
 		# Checks that the robot is connected
 		if not self.robot:
@@ -747,6 +757,9 @@ class UR_Joint_Listener(object):
 			
 			try:
 				self.robot.send_servoj(999, joint_positions, 8 * self.RATE)
+				if wait:
+					while self.genf(joint_positions)>0.3:
+						time.sleep(1)
 			except socket.error:
 				traceback.print_exc()
 				
@@ -763,10 +776,10 @@ class UR_Joint_Listener(object):
 			#self.goal_handle.set_accepted()
 	def jog_cartesian(self, target_pose, max_velocity,relative, wait):
 		try:
-			end_effector_position=[-target_pose[0]['position']['x'][0],-target_pose[0]['position']['y'][0],target_pose[0]['position']['z'][0]]
-			print(str(end_effector_position))
+			end_effector_position=[target_pose[0]['position']['x'][0],target_pose[0]['position']['y'][0],target_pose[0]['position']['z'][0]]
 			end_effector_quaternion=[target_pose[0]['orientation']['w'][0],target_pose[0]['orientation']['x'][0],target_pose[0]['orientation']['y'][0],target_pose[0]['orientation']['z'][0]]
 			joint_angles=lab_invk(end_effector_position[0],end_effector_position[1],end_effector_position[2],-90)
+			# joint_angles=robot6_sphericalwrist_invkin(UR_def,Transform(q2R(end_effector_quaternion),end_effector_position))[0]
 			self.jog_joint(joint_angles,max_velocity,relative, wait)
 		except:
 			traceback.print_exc()
