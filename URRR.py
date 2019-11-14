@@ -1029,7 +1029,7 @@ def main():
 	pather=Path()
 	path=pather.absolute()
 	# robot_hostname="ur-2013216004"
-	robot_hostname="128.113.224.8"
+	robot_hostname="128.113.224.10"
 	with open(str(path)+'/prog') as fin:
 		programstring = fin.read() % {"driver_hostname": get_my_ip(robot_hostname, PORT), "driver_reverseport": reverse_port}
 	program=bytearray(programstring)#,'utf-8')

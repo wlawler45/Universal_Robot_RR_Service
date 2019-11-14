@@ -27,8 +27,8 @@ def lab_invk(xWgrip,yWgrip,zWgrip, yaw_WgripDegree):
   # step 1: get xgrip, ygrip, zgrip
   # Ogrip=H(base->world)*Owgrip
   # a 30*30*1.6 cm base for the robot
-	xgrip = xWgrip
-	ygrip = yWgrip
+	xgrip = -xWgrip
+	ygrip = -yWgrip
 	zgrip = zWgrip
 
 
